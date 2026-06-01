@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .protocol import TTSAdapter, ModelInfo
+from runtime.adapter.protocol import TTSAdapter, ModelInfo
 
 
 class ModelRegistry:

@@ -3,6 +3,14 @@ __pycache__/
 probes/output/
 storage/prompts/
 *.wav
-.npz
+*.npz
 *.egg-info/
 dist/
+*.npy
+*.gguf
+*.onnx
+models/
+*.dll
+*.so
+*.dylib
+.token.ids.txt
