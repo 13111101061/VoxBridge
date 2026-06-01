@@ -1,3 +1,5 @@
+[English](README.md)
+
 # VoxBridge — 零依赖多模型 TTS 推理网关
 
 基于 StreamVox 生态的轻量 TTS 推理框架。运行时适配器协议 + 设备检测 + 模型注册，首个适配器 **Qwen3 1.7B TTS** 已跑通全链路。
@@ -15,7 +17,7 @@
 ## 目录结构
 
 ```
-AI-TTS/
+VoxBridge/
 ├── runtime/                    # 核心运行时（零外部依赖）
 │   ├── adapter/protocol.py     # TTSAdapter 接口协议
 │   ├── device/device.py        # GPU 后端检测 (Vulkan/CUDA/DirectML/CPU)
