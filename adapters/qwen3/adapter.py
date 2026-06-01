@@ -214,15 +214,19 @@ class Qwen3TTSAdapter:
         batch, keep = _make_embd_batch(embs)
         lm.llama_decode(ctx, batch)
         del keep, batch
+
+        # trailing text hidden (last text token's hidden state for teacher forcing)
+        emb_ptr = lm.llama_get_embeddings(ctx)
+        emb_all = np.ctypeslib.as_array(emb_ptr, shape=(n * n_embd,))
+        trailing_text_hidden = emb_all[-n_embd:].copy().astype(np.float32)
         pos = n
 
         # autoregressive generate
-        for _ in range(MAX_NEW_TOKENS):
+        for step in range(MAX_NEW_TOKENS):
             lp = lm.llama_get_logits(ctx)
-            n_vocab = TALKER_VOCAB
-            logits = np.array(list(lp[:n_vocab]), dtype=np.float64)
+            logits = np.array(list(lp[:TALKER_VOCAB]), dtype=np.float64)
             c0 = _sample(logits, rng=self._rng)
-            if c0 == 0:  # talker EOS token
+            if c0 == 0:  # GGUF EOS (endoftext)
                 break
 
             emb_ptr = lm.llama_get_embeddings(ctx)
@@ -233,7 +237,8 @@ class Qwen3TTSAdapter:
             cg = [c0] + sub
             all_codes.append(cg)
 
-            summed = np.zeros(n_embd, dtype=np.float32)
+            # summed codec embeddings + trailing text (teacher forcing)
+            summed = trailing_text_hidden.copy()
             for i in range(N_CODE_GROUPS):
                 summed += self._embeddings[i][cg[i]].astype(np.float32)
 
