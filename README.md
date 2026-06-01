@@ -1,46 +1,44 @@
-[中文文档](README_CN.md)
+[English](README_EN.md)
 
-# VoxBridge — Zero-Dependency Multi-Model TTS Inference Gateway
+# VoxBridge — 零依赖多模型 TTS 推理网关
 
-A lightweight TTS inference framework built on the StreamVox ecosystem. Protocol-driven adapter architecture with auto GPU detection and model registry. The first adapter, **Qwen3 1.7B TTS**, runs the full pipeline end-to-end.
+基于 StreamVox 生态的轻量 TTS 推理框架。运行时适配器协议 + 设备检测 + 模型注册，首个适配器 **Qwen3 1.7B TTS** 已跑通全链路。
 
 ```
-    text
-      ↓ tokenizer (HuggingFace tokenizers, CPU)
-    token IDs
-      ↓ text_embedding_projected.npy lookup
-    2048-dim text embeddings + Speaker embedding
-      ↓ talker.gguf (Vulkan GGUF, ~0.014s/decode)
-    16 codec tokens × N frames
-      ↓ ONNX decoder (DirectML / CPU, stateful)
-    24kHz WAV audio output
+    ↓ tokenizer (HuggingFace tokenizers, CPU)
+  文本 token IDs
+    ↓ text_embedding_projected.npy 查表
+  2048-dim 文本向量 + Speaker 嵌入
+    ↓ talker.gguf (Vulkan GGUF, ~0.014s/decode)
+  16 组 codec tokens × N 帧
+    ↓ ONNX decoder (DirectML / CPU, stateful)
 ```
 
-## Directory Structure
+## 目录结构
 
 ```
 VoxBridge/
-├── runtime/                    # Core runtime (zero external deps)
-│   ├── adapter/protocol.py     # TTSAdapter interface protocol
-│   ├── device/device.py        # GPU backend detection (Vulkan/CUDA/DirectML/CPU)
-│   └── registry/registry.py    # Model registry
-├── adapters/                   # Model adapter implementations
-│   ├── qwen3/adapter.py        # Qwen3 1.7B TTS — 400-line full streaming pipeline
-│   └── onnx_generic/           # Generic ONNX adapter (TBD)
-├── config/                     # Configuration files (TBD)
-├── gateway/                    # API gateway (TBD)
-├── storage/                    # Prompt / cache storage
-└── probes/                     # Probe scripts & test outputs
-    ├── run_e2e.py              # One-click end-to-end GPU inference test
-    ├── test_embd_c_api.py      # llama.cpp embedding injection verification
-    └── output/                 # Generated WAV / NPZ (excluded by .gitignore)
+├── runtime/                    # 核心运行时（零外部依赖）
+│   ├── adapter/protocol.py     # TTSAdapter 接口协议
+│   ├── device/device.py        # GPU 后端检测 (Vulkan/CUDA/DirectML/CPU)
+│   └── registry/registry.py    # 模型注册表
+├── adapters/                   # 模型适配器实现
+│   ├── qwen3/adapter.py        # Qwen3 1.7B TTS 
+│   └── onnx_generic/           # 通用 ONNX 适配器（待实现）
+├── config/                     # 配置文件（待填充）
+├── gateway/                    # API 网关（待实现）
+├── storage/                    # 提示词 / 缓存存储
+└── probes/                     # 探针脚本 & 测试输出
+    ├── run_e2e.py              # 一键端到端 GPU 推理测试
+    ├── test_embd_c_api.py      # llama.cpp embedding 注入验证
+    └── output/                 # 生成的 WAV / NPZ（被 .gitignore 排除）
 ```
 
-## Architecture
+## 架构分层
 
-### 1. `TTSAdapter` Protocol (`runtime/adapter/protocol.py`)
+### 1. `TTSAdapter` 协议 (`runtime/adapter/protocol.py`)
 
-All adapters implement this interface:
+所有适配器实现此接口：
 
 ```python
 class TTSAdapter(Protocol):
@@ -51,19 +49,19 @@ class TTSAdapter(Protocol):
     def shutdown(self) -> None: ...
 ```
 
-### 2. Device Detection (`runtime/device/`)
+### 2. 设备检测 (`runtime/device/`)
 
-`detect_device()` automatically selects the optimal backend:
+`detect_device()` 自动选择最优后端：
 
-| Platform | Auto-Selected |
+| 平台 | 自动选择 |
 |---|---|
 | Windows (AMD GPU) | llama: Vulkan + ONNX: DirectML |
 | Windows (NVIDIA GPU) | llama: CUDA + ONNX: CUDA |
 | Linux | llama: Vulkan + ONNX: CPU |
 
-Accepts `device="gpu:0"`, `device="cpu"`, `device="auto"`, etc.
+支持 `device="gpu:0"`, `device="cpu"`, `device="auto"` 等参数。
 
-### 3. Model Registry (`runtime/registry/`)
+### 3. 模型注册表 (`runtime/registry/`)
 
 ```python
 from runtime.registry import ModelRegistry
@@ -73,163 +71,49 @@ reg = ModelRegistry()
 reg.register(Qwen3TTSAdapter("./models/qwen3-tts-clone-1.7b-gguf"))
 adapter = reg.get("qwen3-tts-clone-1.7b-gguf")
 adapter.load(device="auto")
-for chunk in adapter.stream("Hello world"):
+for chunk in adapter.stream("你好世界"):
     play(chunk)
 adapter.shutdown()
 ```
 
-## Quick Start
+## 依赖
 
-### Install
+### Python 包
 
-```bash
-git clone https://github.com/13111101061/VoxBridge.git
-cd VoxBridge
-pip install numpy onnxruntime tokenizers soundfile scipy
-# Install StreamVox from https://github.com/batniel/StreamVox
-```
+| 包 | 用途 |
+|---|---|
+| `numpy` | 向量计算 / 音频 / Mel |
+| `onnxruntime` | ONNX 模型推理 |
+| `tokenizers` (HuggingFace) | 文本 tokenize |
+| `soundfile` | WAV 读写 |
+| `scipy` | Mel 提取 (STFT) / 重采样 |
+| `streamvox` | llama.cpp Python 绑定 (GGUF 推理) |
 
-### Prepare Model Files
+### 系统依赖
 
-Place the Qwen3 1.7B TTS models under `models/qwen3-tts-clone-1.7b-gguf/`:
+| 依赖 | 说明 |
+|---|---|
+| `ggml-vulkan.dll` | StreamVox 安装时自带，Vulkan GPU 加速 |
+| `ggml-cpu.dll` | CPU 后备推理 |
+| `onnxruntime.dll` | ONNX Runtime 运行时 |
+| `DirectML.dll` | Windows DirectX 12 GPU 算子 |
+
+**Windows 用户**: AMD GPU 需要安装 Vulkan Runtime (Mesa Vulkan 或驱动自带)。NVIDIA GPU 需要 CUDA Toolkit。
+
+## 模型文件
+
+Qwen3 1.7B TTS 需要以下模型文件，放入 `models/qwen3-tts-clone-1.7b-gguf/` 目录：
 
 ```
 qwen3-tts-clone-1.7b-gguf/
 ├── tokenizer.json                          # HuggingFace Tokenizer
-├── qwen3_tts_decoder.fp16.onnx             # ONNX audio decoder (~350MB)
+├── qwen3_tts_decoder.fp16.onnx             # ONNX 音频解码器 (~350MB)
 ├── ckpt/clone_1.7B/
-│   ├── qwen3_tts_talker.q5_k.gguf          # GGUF talker (~2.5GB)
-│   ├── qwen3_tts_predictor.q8_0.gguf       # GGUF predictor (~700MB)
-│   ├── qwen3_tts_speaker_encoder.fp16.onnx  # Speaker encoder
-│   └── embeddings/
-│       ├── codec_embedding_0~15.npy        # Codec embedding tables (16 files)
-│       ├── text_embedding_projected.npy    # Text→embedding lookup (~600MB)
-│       ├── proj_weight.npy                 # Projection matrix (~32MB)
-│       └── proj_bias.npy                   # Projection bias
-```
-
-**Important**: Model files are ~4GB total — do NOT commit to Git (already in `.gitignore`).
-
-### Run
-
-```python
-from adapters.qwen3.adapter import Qwen3TTSAdapter
-import soundfile as sf, numpy as np
-
-a = Qwen3TTSAdapter("./models/qwen3-tts-clone-1.7b-gguf")
-a.load(device="auto")  # Vulkan+DirectML on AMD, CUDA on NVIDIA
-
-chunks = list(a.stream("Hello world, this is VoxBridge."))
-audio = np.concatenate(chunks)
-sf.write("output.wav", audio, 24000)
-a.shutdown()
-```
-
-Or run the probe script:
-
-```bash
-python probes/run_e2e.py
-```
-
-### Voice Cloning
-
-```python
-import soundfile as sf
-from runtime.adapter.protocol import PromptData
-
-ref_audio, sr = sf.read("reference.wav", dtype='float32')
-prompt = PromptData(model_name="qwen3-tts-clone-1.7b-gguf")
-prompt.metadata["spk_audio"] = ref_audio
-
-for chunk in a.stream("Hello world", prompt=prompt):
-    play(chunk)  # Uses reference speaker identity
-```
-
-## Dependencies
-
-| Package | Purpose |
-|---|---|
-| `numpy` | Vector math / audio / Mel |
-| `onnxruntime` | ONNX model inference |
-| `tokenizers` (HuggingFace) | Text tokenization |
-| `soundfile` | WAV I/O |
-| `scipy` | Mel extraction (STFT) / resampling |
-| `streamvox` | llama.cpp Python bindings (GGUF inference) |
-
-System requirements:
-- `ggml-vulkan.dll` (bundled with StreamVox)
-- `onnxruntime.dll`
-- `DirectML.dll` (Windows, for GPU decoding)
-- AMD: Vulkan Runtime | NVIDIA: CUDA Toolkit
-
-## Performance (RX 6900XT)
-
-| Stage | Latency | Backend |
-|---|---|---|
-| Tokenize | < 5ms | CPU |
-| Talker / frame | ~14ms | Vulkan GGUF |
-| Predictor / frame | ~6ms | Vulkan GGUF |
-| ONNX Decoder / chunk | ~50ms | DirectML |
-| **Total "hello" (10 frames)** | **~0.5s** | — |
-
-CPU inference is ~18x slower (talker ~250ms/frame).
-
-## Technical Highlights (Qwen3 Adapter)
-
-### Embedding Injection
-
-llama.cpp Python bindings do not natively support embedding input mode. We manually construct the `llama_batch` struct via `ctypes`:
-
-```python
-batch = type(lm.llama_batch_get_one(...))()  # Get struct type
-batch.n_tokens = N
-batch.token = NULL                           # No token IDs
-batch.embd = embeddings.ctypes.data          # Inject vectors instead
-lm.llama_decode(ctx, batch)
-```
-
-### Vulkan Compatibility
-
-- `llama_get_logits_ith()` hangs on Vulkan backend — use `llama_get_logits()` instead
-- Vulkan and CPU `llama_batch` struct layouts differ — do NOT reuse across backends
-- Talker GGUF vocab size = 3072 (codec tokens only), EOS = token 0
-
-### ONNX Decoder
-
-- Input `audio_codes`: int64 tensor, shape `(batch, num_frames, 16)`
-- Output `final_wav`: float16, shape `(batch, samples)`
-- Stateful decoding: maintain 8-layer KV cache, conv_history, latent_buffer, pre_conv_history across chunks
-
-### Speaker Encoder
-
-- ONNX input: `mels` float16 `(batch, T, 128)`
-- Mel parameters: sr=24000, n_fft=1024, hop=256, n_mels=128, f_min=0, f_max=12000
-- Output: `spk_emb` float16 `(batch, 2048)`
-
-## Roadmap
-
-- [x] v0.1 Runtime core + Qwen3 adapter framework
-- [x] v0.2 Embedding batch injection via ctypes
-- [x] v0.3 Vulkan GPU acceleration verified (18x speedup)
-- [x] v0.4 Full GPU pipeline (talker + predictor + decoder)
-- [x] v0.5 End-to-end WAV output
-- [x] v0.6 Architecture alignment with official Qwen3-TTS
-- [x] v0.7 Speaker encoder integration
-- [x] v0.8 Real Mel extraction + Speaker embedding → voice cloning
-- [ ] v0.9 Streaming pipeline (threading/queue, real-time TTS)
-- [ ] v0.10 Speaker encoder ONNX with GPU acceleration
-- [ ] v1.0 WebSocket API Gateway
-- [ ] v1.1 Predictor KV cache clearing (fix long-audio quality degradation)
-- [ ] v1.2 Q8_0 / FP16 talker replacement (audio quality improvement)
-- [ ] v2.0 Multi-model support (CosyVoice, ChatTTS)
-
-## Known Issues
-
-1. **Audio quality**: Talker uses Q5_K quantization causing electronic distortion. Replace with Q8_0 or FP16 GGUF.
-2. **Long audio**: Predictor KV cache reuses positions 0..16 per frame — may accumulate artifacts.
-3. **Windows-only**: DirectML and Vulkan backends currently verified on Windows only.
-4. **Speaker encoder**: Reference audio must be resampled to 24000Hz mono float32.
-
-## License
-
-MIT
+│   ├── qwen3_tts_talker.q5_k.gguf          # GGUF talker 模型 (~2.5GB)
+│   ├── qwen3_tts_predictor.q8_0.gguf       # GGUF 预测器 (~700MB)
+│   ├── qwen3_tts_speaker_encoder.fp16.onnx  # 音色编码器
+│   └── embeddings/                         # 嵌入权重表
+│       ├── codec_embedding_0.npy  ~  codec_embedding_15.npy  (16个)
+│       ├── text_embedding_projected.npy    # 文本→嵌入映射表 (~600MB)
+│       ├── proj_weight.npy                 # 投影矩阵 (~32MB)
+│       └── proj_bias.npy                   # 投影偏置
