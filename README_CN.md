@@ -1,9 +1,8 @@
-# AI-TTS — 零依赖多模型 TTS 推理网关
+# VoxBridge — 零依赖多模型 TTS 推理网关
 
 基于 StreamVox 生态的轻量 TTS 推理框架。运行时适配器协议 + 设备检测 + 模型注册，首个适配器 **Qwen3 1.7B TTS** 已跑通全链路。
 
 ```
-  文本 "你好世界"
     ↓ tokenizer (HuggingFace tokenizers, CPU)
   文本 token IDs
     ↓ text_embedding_projected.npy 查表
@@ -11,7 +10,6 @@
     ↓ talker.gguf (Vulkan GGUF, ~0.014s/decode)
   16 组 codec tokens × N 帧
     ↓ ONNX decoder (DirectML / CPU, stateful)
-  24000Hz WAV 音频流
 ```
 
 ## 目录结构
@@ -23,7 +21,7 @@ AI-TTS/
 │   ├── device/device.py        # GPU 后端检测 (Vulkan/CUDA/DirectML/CPU)
 │   └── registry/registry.py    # 模型注册表
 ├── adapters/                   # 模型适配器实现
-│   ├── qwen3/adapter.py        # Qwen3 1.7B TTS — 677行全链路推理
+│   ├── qwen3/adapter.py        # Qwen3 1.7B TTS 
 │   └── onnx_generic/           # 通用 ONNX 适配器（待实现）
 ├── config/                     # 配置文件（待填充）
 ├── gateway/                    # API 网关（待实现）
@@ -117,159 +115,3 @@ qwen3-tts-clone-1.7b-gguf/
 │       ├── text_embedding_projected.npy    # 文本→嵌入映射表 (~600MB)
 │       ├── proj_weight.npy                 # 投影矩阵 (~32MB)
 │       └── proj_bias.npy                   # 投影偏置
-```
-
-**注意**: 模型文件较大 (~4GB)，**不应提交到 GitHub**。需从 StreamVox 导出或自行转换。
-
-## 快速开始
-
-### 安装
-
-```bash
-# 1. 克隆仓库
-git clone https://github.com/yourname/AI-TTS.git
-cd AI-TTS
-
-# 2. 安装 StreamVox (提供 llama.cpp Python DLL 绑定)
-# 从 https://github.com/batniel/StreamVox 安装
-# 或下载预编译包
-
-# 3. 安装 Python 依赖
-uv pip install numpy onnxruntime tokenizers soundfile scipy
-# 或 pip install numpy onnxruntime tokenizers soundfile scipy
-
-# 4. 准备模型文件夹（见上方目录结构）
-#    将 StreamVox 导出的 qwen3-tts-clone-1.7b-gguf 放入 models/ 目录
-
-# 5. 运行端到端测试
-python probes/run_e2e.py
-```
-
-### API 使用
-
-```python
-from adapters.qwen3.adapter import Qwen3TTSAdapter
-import soundfile as sf
-
-# 初始化
-a = Qwen3TTSAdapter("./models/qwen3-tts-clone-1.7b-gguf")
-a.load(device="auto")  # 自动检测 GPU
-
-# 生成音频
-chunks = list(a.stream("你好世界，欢迎使用AI-TTS。"))
-audio = np.concatenate(chunks)
-sf.write("output.wav", audio, 24000)
-
-a.shutdown()
-```
-
-### 音色克隆
-
-```python
-import soundfile as sf
-from runtime.adapter.protocol import PromptData
-
-# 加载参考音频
-ref_audio, sr = sf.read("reference.wav", dtype='float32')
-
-# 传递给 stream()
-prompt = PromptData(model_name="qwen3-tts-clone-1.7b-gguf")
-prompt.metadata["spk_audio"] = ref_audio
-
-for chunk in a.stream("你好世界", prompt=prompt):
-    play(chunk)  # 使用参考音色
-```
-
-## 性能参考 (RX 6900XT)
-
-| 阶段 | 耗时 | 后端 |
-|---|---|---|
-| Tokenize | < 5ms | CPU |
-| Talker (每帧) | ~14ms | Vulkan GGUF |
-| Predictor (每帧) | ~6ms | Vulkan GGUF |
-| ONNX Decoder (每 chunk) | ~50ms | DirectML |
-| 总: 10 帧 "hello" | ~0.5s | — |
-
-CPU 推理约慢 18 倍（talker 每帧 ~250ms）。
-
-## 技术要点 (Qwen3 适配器)
-
-### Embedding 注入
-
-llama.cpp 的 Python 绑定默认不支持 embedding 输入模式。我们通过 `ctypes` 手动构造 `llama_batch` 结构体实现：
-
-```python
-batch = type(lm.llama_batch_get_one(...))()  # 获取结构体类型
-batch.n_tokens = N
-batch.token = NULL
-batch.embd = embeddings.ctypes.data  # 注入向量而非 token ID
-lm.llama_decode(ctx, batch)            # 直接解码
-```
-
-### Vulkan 兼容性
-
-- `llama_get_logits_ith()` 在 Vulkan 后端会挂起 —— 改用 `llama_get_logits()` 获取全部输出
-- Vulkan 和 CPU 后端的 `llama_batch` 结构体布局不同，**不可跨后端复用**
-- Talker GGUF 词表为 3072（纯 codec token），EOS=token 0
-
-### ONNX 解码器
-
-- 输入 `audio_codes`: int64 张量，shape `(batch, num_frames, 16)`
-- 输出 `final_wav`: float16，shape `(batch, samples)`
-- 有状态解码：需维护 8 层 KV cache + conv_history + latent_buffer + pre_conv_history
-- 建议使用 DirectML `deviceLayout=NHWC` 优化
-
-### Speaker Encoder
-
-- ONNX 输入: `mels` float16 `(batch, T, 128)` 
-- Mel 参数: sr=24000, n_fft=1024, hop=256, n_mels=128, f_min=0, f_max=12000
-- 输出: `spk_emb` float16 `(batch, 2048)`
-
-## 开发路线
-
-- [x] v0.1 运行时核 + Qwen3 适配器框架
-- [x] v0.2 Embedding 批注入突破（ctypes 手动构造）
-- [x] v0.3 Vulkan GPU 加速验证 (18x 提速)
-- [x] v0.4 完整 GPU 管线 (talker + predictor + decoder)
-- [x] v0.5 端到端 WAV 输出
-- [x] v0.6 架构对齐官方 Qwen3-TTS 源码
-- [x] v0.7 Speaker Encoder 集成 + Mel 提取
-- [x] v0.8 真实 Mel 频谱 → Speaker 嵌入 → 音色克隆
-- [ ] v0.9 流式 pipeline (多线程/队列，实时 TTS)
-- [ ] v0.10 Speaker Encoder ONNX GPU 加速
-- [ ] v1.0 WebSocket API Gateway
-- [ ] v1.1 Predictor KV cache 清理（修复长音频质量衰减）
-- [ ] v1.2 Q8_0 / FP16 Talker 替换 (提升音质)
-- [ ] v2.0 多模型支持 (CosyVoice / ChatTTS)
-
-## 已知问题
-
-1. **音质**: talker 使用 Q5_K 量化，存在电子失真。建议替换为 Q8_0 或 FP16 GGUF。
-2. **长音频**: Predictor KV cache 以位置 0..16 复写每帧，长音频可能产生累积失真。
-3. **Windows 专用**: DirectML 和 Vulkan 后端目前仅在 Windows 验证通过。
-4. **Speaker Encoder**: 需要参考音频重采样到 24000Hz 单声道 float32。
-
-## GitHub 上传清单
-
-### 要上传
-```
-所有 .py 源文件
-.gitignore
-README_CN.md
-```
-
-### 不要上传（已在 .gitignore）
-```
-__pycache__/        # Python 缓存
-probes/output/      # 测试输出 (WAV, NPZ, ~600MB+)
-storage/prompts/    # 提示词存储
-*.wav, *.npz        # 音频/数组文件
-*.egg-info/, dist/  # 打包产物
-
-模型文件目录:        # 通过 .gitignore 排除或不上传到仓库
-  models/           # GGUF + ONNX + NPY (约 4GB+)
-```
-
-## License
-
-MIT
