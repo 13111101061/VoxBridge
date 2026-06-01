@@ -213,13 +213,13 @@ class Qwen3TTSAdapter:
             dtype=np.float32,
         )
         batch, keep = _make_embd_batch(embs)
-        ctx.decode(batch)
+        lm.llama_decode(ctx, batch)
         del keep, batch
         pos = n
 
         # autoregressive generate
         for _ in range(MAX_NEW_TOKENS):
-            lp = ctx.get_logits_ith(pos - 1)
+            lp = lm.llama_get_logits_ith(ctx, pos - 1)
             logits = np.array(
                 list(lp[:CODE_EOS]) + [lp[CODE_EOS]], dtype=np.float64,
             )
@@ -227,8 +227,9 @@ class Qwen3TTSAdapter:
             if c0 == CODE_EOS:
                 break
 
-            emb_all = ctx.get_embeddings()
-            hidden = np.ctypeslib.as_array(emb_all, shape=(pos * n_embd,))[-n_embd:].copy().astype(np.float32)
+            emb_ptr = lm.llama_get_embeddings(ctx)
+            emb_all = np.ctypeslib.as_array(emb_ptr, shape=(pos * n_embd,))
+            hidden = emb_all[-n_embd:].copy().astype(np.float32)
 
             sub = self._run_predictor(hidden, c0)
             cg = [c0] + sub
@@ -241,7 +242,7 @@ class Qwen3TTSAdapter:
             gen_batch, gen_keep = _make_embd_batch(
                 summed.reshape(1, -1), pos_offset=pos,
             )
-            ctx.decode(gen_batch)
+            lm.llama_decode(ctx, gen_batch)
             del gen_keep, gen_batch
             pos += 1
 
@@ -260,20 +261,20 @@ class Qwen3TTSAdapter:
         ]).astype(np.float32)
 
         pb, pk = _make_embd_batch(combined)
-        ctx.decode(pb)
+        lm.llama_decode(ctx, pb)
         del pk, pb
         cur = 2
 
         sub: list[int] = []
         for idx in range(1, N_CODE_GROUPS):
-            lp = ctx.get_logits_ith(cur - 1)
+            lp = lm.llama_get_logits_ith(ctx, cur - 1)
             nxt = _sample(np.array(lp[:2048], dtype=np.float64), rng=self._rng)
             sub.append(nxt)
 
             if idx < N_CODE_GROUPS - 1:
                 emb = self._embeddings[idx][nxt].astype(np.float32)
                 nb, nk = _make_embd_batch(emb.reshape(1, -1), pos_offset=cur)
-                ctx.decode(nb)
+                lm.llama_decode(ctx, nb)
                 del nk, nb
                 cur += 1
 
