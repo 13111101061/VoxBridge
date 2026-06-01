@@ -1,0 +1,1 @@
+from .registry import ModelRegistry  # noqa: F401

@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+probes/output/
+storage/prompts/
+*.wav
+.npz
+*.egg-info/
+dist/
