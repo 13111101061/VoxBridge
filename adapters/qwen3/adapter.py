@@ -25,17 +25,11 @@ N_EMBD_P: int = 2048  # predictor handles internal 1024 projection
 
 # ─── EmbeddingBatch ────────────────────────────────────────────────
 
-_CACHED_BATCH_TYPE: type | None = None
-
-
 def _get_batch_type() -> type:
-    """Get the llama_batch ctypes type used by StreamVox's DLL (cached)."""
-    global _CACHED_BATCH_TYPE
-    if _CACHED_BATCH_TYPE is None:
-        dummy_tokens = (ctypes.c_int32 * 1)(198)
-        batch = lm.llama_batch_get_one(dummy_tokens, 1, 0, 0)
-        _CACHED_BATCH_TYPE = type(batch)
-    return _CACHED_BATCH_TYPE
+    """Get the llama_batch ctypes type used by StreamVox's DLL."""
+    dummy_tokens = (ctypes.c_int32 * 1)(198)
+    batch = lm.llama_batch_get_one(dummy_tokens, 1, 0, 0)
+    return type(batch)
 
 
 def _make_embd_batch(embeddings: np.ndarray, *, pos_offset: int = 0,
