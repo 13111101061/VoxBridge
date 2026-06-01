@@ -173,7 +173,10 @@ class Qwen3TTSAdapter:
                *, language: str = "chinese", **kw) -> Iterator[np.ndarray]:
         self._ensure()
         tokens = self._tokenize(text)
-        codes = self._invoke_talker(tokens)
+        spk_emb = self._get_speaker_embedding(
+            prompt.metadata.get("spk_audio") if prompt else None
+        )
+        codes = self._invoke_talker(tokens, spk_emb)
         yield from self._decode_stream(codes)
 
     def shutdown(self) -> None:
@@ -189,11 +192,17 @@ class Qwen3TTSAdapter:
 
     # ── speaker ──────────────────────────────────────────────
 
-    def _get_speaker_embedding(self) -> np.ndarray:
-        if self._spk_enc_sess is None:
-            return np.zeros(N_EMBD_T, dtype=np.float32)
-        mels = np.zeros((1, 97, 128), dtype=np.float16)
-        return self._spk_enc_sess.run(None, {"mels": mels})[0].flatten().astype(np.float32)
+    def _get_speaker_embedding(self, ref_audio: np.ndarray | None = None) -> np.ndarray:
+        if ref_audio is not None and self._spk_enc_sess is not None:
+            return self._extract_speaker(ref_audio)
+        return np.zeros(N_EMBD_T, dtype=np.float32)
+
+    def _extract_speaker(self, audio: np.ndarray) -> np.ndarray:
+        from streamvox.utils.mel import MelExtractor
+        ext = MelExtractor()
+        log_mel = ext.extract(audio.astype(np.float32))  # [T, 128]
+        mel_input = log_mel[np.newaxis, :].astype(np.float16)  # [1, T, 128]
+        return self._spk_enc_sess.run(None, {"mels": mel_input})[0].flatten().astype(np.float32)
 
     # ── tokenizer ────────────────────────────────────────────
 
@@ -214,7 +223,7 @@ class Qwen3TTSAdapter:
 
     # ── talker ───────────────────────────────────────────────
 
-    def _invoke_talker(self, tokens: list[int]) -> np.ndarray:
+    def _invoke_talker(self, tokens: list[int], spk_emb: np.ndarray | None = None) -> np.ndarray:
         ctx = self._talker_ctx; n_embd = N_EMBD_T
         all_codes: list[list[int]] = []
 
