@@ -37,10 +37,7 @@ t0 = time.time()
 codes = a._invoke_talker(a._tokenize('hello'))
 print(f'    Codes: {codes.shape} ({time.time()-t0:.1f}s)')
 
-latent = a._project(codes)
-print(f'    Latent: {latent.shape}')
-
-chunks = list(a._decode_stream(latent))
+chunks = list(a._decode_stream(codes))
 audio = np.concatenate(chunks) if chunks else np.array([], dtype=np.float32)
 t1 = time.time()
 print(f'    Audio: {len(audio)}smp, {len(audio)/24000:.1f}s, total {t1-t0:.1f}s')

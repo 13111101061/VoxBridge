@@ -17,19 +17,25 @@ from runtime.device.device import DeviceContext, detect_device
 SAMPLE_RATE: int = 24000; CHUNK_SIZE: int = 12; SKIP_SAMPLES: int = 7680
 N_CODE_GROUPS: int = 16; MAX_NEW_TOKENS: int = 2048
 IM_START: int = 151644; IM_END: int = 151645
-CODE_EOS: int = 4198
-
+TALKER_VOCAB: int = 3072
+PRED_VOCAB: int = 2048
 N_EMBD_T: int = 2048
 N_EMBD_P: int = 2048  # predictor handles internal 1024 projection
 
 
 # ─── EmbeddingBatch ────────────────────────────────────────────────
 
+_CACHED_BATCH_TYPE: type | None = None
+
+
 def _get_batch_type() -> type:
-    """Get the llama_batch ctypes type used by StreamVox's DLL."""
-    dummy_tokens = (ctypes.c_int32 * 1)(198)
-    batch = lm.llama_batch_get_one(dummy_tokens, 1, 0, 0)
-    return type(batch)
+    """Get the llama_batch ctypes type used by StreamVox's DLL (cached)."""
+    global _CACHED_BATCH_TYPE
+    if _CACHED_BATCH_TYPE is None:
+        dummy_tokens = (ctypes.c_int32 * 1)(198)
+        batch = lm.llama_batch_get_one(dummy_tokens, 1, 0, 0)
+        _CACHED_BATCH_TYPE = type(batch)
+    return _CACHED_BATCH_TYPE
 
 
 def _make_embd_batch(embeddings: np.ndarray, *, pos_offset: int = 0,
@@ -169,8 +175,7 @@ class Qwen3TTSAdapter:
         self._ensure()
         tokens = self._tokenize(text)
         codes = self._invoke_talker(tokens)
-        latent = self._project(codes)
-        yield from self._decode_stream(latent)
+        yield from self._decode_stream(codes)
 
     def shutdown(self) -> None:
         if self._talker_ctx:
@@ -219,12 +224,11 @@ class Qwen3TTSAdapter:
 
         # autoregressive generate
         for _ in range(MAX_NEW_TOKENS):
-            lp = lm.llama_get_logits_ith(ctx, pos - 1)
-            logits = np.array(
-                list(lp[:CODE_EOS]) + [lp[CODE_EOS]], dtype=np.float64,
-            )
+            lp = lm.llama_get_logits(ctx)
+            n_vocab = TALKER_VOCAB
+            logits = np.array(list(lp[:n_vocab]), dtype=np.float64)
             c0 = _sample(logits, rng=self._rng)
-            if c0 == CODE_EOS:
+            if c0 == 0:  # talker EOS token
                 break
 
             emb_ptr = lm.llama_get_embeddings(ctx)
@@ -267,8 +271,8 @@ class Qwen3TTSAdapter:
 
         sub: list[int] = []
         for idx in range(1, N_CODE_GROUPS):
-            lp = lm.llama_get_logits_ith(ctx, cur - 1)
-            nxt = _sample(np.array(lp[:2048], dtype=np.float64), rng=self._rng)
+            lp = lm.llama_get_logits(ctx)
+            nxt = _sample(np.array(lp[:PRED_VOCAB], dtype=np.float64), rng=self._rng)
             sub.append(nxt)
 
             if idx < N_CODE_GROUPS - 1:
@@ -291,21 +295,21 @@ class Qwen3TTSAdapter:
 
     # ── decoder ──────────────────────────────────────────────
 
-    def _decode_stream(self, latent: np.ndarray) -> Iterator[np.ndarray]:
+    def _decode_stream(self, codes: np.ndarray) -> Iterator[np.ndarray]:
         sess = self._decoder_sess
         state = _init_decoder_state()
-        T = latent.shape[0]
+        T = codes.shape[0]
         for i in range(0, T, CHUNK_SIZE):
-            chunk = latent[i:i + CHUNK_SIZE]
+            chunk = codes[i:i + CHUNK_SIZE].astype(np.int64)
             n = chunk.shape[0]
             if n < CHUNK_SIZE:
-                pad = np.zeros((CHUNK_SIZE - n, latent.shape[1]), dtype=latent.dtype)
+                pad = np.zeros((CHUNK_SIZE - n, N_CODE_GROUPS), dtype=np.int64)
                 chunk = np.concatenate([chunk, pad])
             is_last = np.array(
                 [1.0 if i + CHUNK_SIZE >= T else 0.0], dtype=np.float16,
             )
             feed = {
-                "audio_codes": chunk[None].astype(np.float16),
+                "audio_codes": chunk[None],
                 "pre_conv_history": state["pre_conv_history"],
                 "latent_buffer": state["latent_buffer"],
                 "conv_history": state["conv_history"],
