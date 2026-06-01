@@ -328,7 +328,7 @@ class Qwen3TTSAdapter:
             for k in range(8):
                 state[f"past_key_{k}"] = out[names.index(f"next_key_{k}")]
                 state[f"past_value_{k}"] = out[names.index(f"next_value_{k}")]
-            wave = raw[:valid]
+            wave = np.clip(raw[:valid], -1.0, 1.0)
             if state.get("_first"):
                 state["_first"] = False
                 yield wave
