@@ -103,6 +103,7 @@ class Qwen3TTSAdapter:
         self._pred_m: object = None
         self._pred_ctx: object = None
         self._decoder_sess: object = None
+        self._spk_enc_sess: object = None
         self._embeddings: list[np.ndarray] = []
         self._text_embd: np.ndarray | None = None
         self._proj_w: np.ndarray | None = None
@@ -161,6 +162,10 @@ class Qwen3TTSAdapter:
             str(self._ckpt.parent / "qwen3_tts_decoder.fp16.onnx"),
             sess_options=so, providers=prov,
         )
+        self._spk_enc_sess = ort.InferenceSession(
+            str(self._ckpt / "qwen3_tts_speaker_encoder.fp16.onnx"),
+            sess_options=so, providers=prov,
+        )
 
     # ── public ───────────────────────────────────────────────
 
@@ -181,6 +186,14 @@ class Qwen3TTSAdapter:
         if self._pred_m:
             lm.llama_model_free(self._pred_m)
         self._loaded = False
+
+    # ── speaker ──────────────────────────────────────────────
+
+    def _get_speaker_embedding(self) -> np.ndarray:
+        if self._spk_enc_sess is None:
+            return np.zeros(N_EMBD_T, dtype=np.float32)
+        mels = np.zeros((1, 97, 128), dtype=np.float16)
+        return self._spk_enc_sess.run(None, {"mels": mels})[0].flatten().astype(np.float32)
 
     # ── tokenizer ────────────────────────────────────────────
 
@@ -207,19 +220,21 @@ class Qwen3TTSAdapter:
 
         # prefill: text tokens → embeddings → embd batch
         n = len(tokens)
-        embs = np.array(
-            [self._text_embd[tid].astype(np.float32) for tid in tokens],
-            dtype=np.float32,
-        )
+        spk_emb = self._get_speaker_embedding()
+        embs = np.zeros((1 + n, n_embd), dtype=np.float32)
+        embs[0] = spk_emb
+        for i, tid in enumerate(tokens):
+            embs[i + 1] = self._text_embd[tid].astype(np.float32)
         batch, keep = _make_embd_batch(embs)
         lm.llama_decode(ctx, batch)
         del keep, batch
 
         # trailing text hidden (last text token's hidden state for teacher forcing)
+        n_total = 1 + n
         emb_ptr = lm.llama_get_embeddings(ctx)
-        emb_all = np.ctypeslib.as_array(emb_ptr, shape=(n * n_embd,))
+        emb_all = np.ctypeslib.as_array(emb_ptr, shape=(n_total * n_embd,))
         trailing_text_hidden = emb_all[-n_embd:].copy().astype(np.float32)
-        pos = n
+        pos = n_total
 
         # autoregressive generate
         for step in range(MAX_NEW_TOKENS):
